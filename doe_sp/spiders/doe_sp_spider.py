@@ -27,7 +27,7 @@ class DoeSpSpider(scrapy.Spider):
 
     def __init__(
         self,
-        termo: Optional[str] = None,
+        termos: Optional[str] = None,
         data_inicio: Optional[str] = None,
         data_fim: Optional[str] = None,
         *args: Any,
@@ -35,31 +35,33 @@ class DoeSpSpider(scrapy.Spider):
     ):
         super().__init__(*args, **kwargs)
 
-        # Validação rígida
-        if not all([termo, data_inicio, data_fim]):
+        if not all([termos, data_inicio, data_fim]):
             self.logger.error(
-                "Erro fatal: É necessário fornecer termo, data_inicio e data_fim."
+                "Erro fatal: É necessário fornecer termos, data_inicio e data_fim."
             )
             raise ValueError("Parâmetros obrigatórios ausentes.")
 
-        self.termo = termo
+        # Transforma a string separada por vírgulas em uma lista, removendo espaços em branco
+        self.lista_termos = [t.strip() for t in termos.split(",")]
         self.data_inicio = data_inicio
         self.data_fim = data_fim
 
         if not os.path.exists(self.OUTPUT_PATH):
             os.makedirs(self.OUTPUT_PATH)
+            self.logger.info(f"Diretório de resultados criado em: {self.OUTPUT_PATH}")
 
     def start_requests(self):
-        self.logger.info("Iniciando consumo direto da API do DOE-SP. Página inicial: 1")
-        # Inicia a recursão de paginação na página 1
-        yield self.build_api_request(page_number=1)
+        self.logger.info(f"Iniciando buscas para {len(self.lista_termos)} termo(s).")
 
-    def build_api_request(self, page_number: int) -> scrapy.Request:
-        """Constrói a requisição para a API REST de busca com base na página atual."""
+        # Inicia uma requisição de página 1 para CADA termo da lista
+        for termo in self.lista_termos:
+            yield self.build_api_request(termo_atual=termo, page_number=1)
+
+    def build_api_request(self, termo_atual: str, page_number: int) -> scrapy.Request:
         params = {
             "periodStartingDate": "personalized",
             "PageNumber": str(page_number),
-            "Terms[0]": self.termo,
+            "Terms[0]": termo_atual,  # A API recebe o termo específico desta iteração
             "FromDate": self.data_inicio,
             "ToDate": self.data_fim,
             "PageSize": "20",
@@ -72,31 +74,26 @@ class DoeSpSpider(scrapy.Spider):
             url=api_url,
             callback=self.parse_api_response,
             headers={"Accept": "application/json"},
-            meta={"page_number": page_number},  # Passamos o estado da página via meta
+            # Transportamos o termo_atual no meta para não perdê-lo durante a paginação
+            meta={"page_number": page_number, "termo_atual": termo_atual},
         )
 
     def parse_api_response(self, response: Response):
         page_number = response.meta.get("page_number", 1)
+        termo_atual = response.meta.get("termo_atual")
+
         self.logger.info(
-            f"Processando resposta da API - Página {page_number} | Status: {response.status}"
+            f"API | Termo: '{termo_atual}' | Página {page_number} | Status: {response.status}"
         )
 
         try:
             data = json.loads(response.text)
             items = data.get("items")
 
-            # Condição de parada: se não há a chave ou a lista está vazia, esgotamos os resultados
             if not items:
-                self.logger.info(
-                    f"Fim da paginação alcançado. Nenhum item na página {page_number}."
-                )
+                self.logger.info(f"Fim da busca para o termo '{termo_atual}'.")
                 return
 
-            self.logger.info(
-                f"Página {page_number}: Encontradas {len(items)} publicações. Despachando para renderização..."
-            )
-
-            # 1. Processa os itens da página atual
             for item in items:
                 slug = item.get("slug")
                 if not slug:
@@ -104,7 +101,6 @@ class DoeSpSpider(scrapy.Spider):
 
                 url_materia = f"{self.BASE_ARTICLE_URL}{slug}"
 
-                # Despacha o Playwright para a URL da matéria
                 yield scrapy.Request(
                     url=url_materia,
                     callback=self.parse_materia,
@@ -121,18 +117,16 @@ class DoeSpSpider(scrapy.Spider):
                     errback=self.errback_close_page,
                 )
 
-            # 2. Continua a paginação
-            # Se a API retornou itens, assumimos que pode haver uma próxima página.
-            # O Scrapy gerencia a fila de forma assíncrona, então ele não vai "esperar"
-            # as matérias acabarem de baixar para chamar a próxima página da API.
+            # Continua a paginação para o TERMO ATUAL
             if len(items) > 0:
                 next_page = page_number + 1
-                self.logger.info(f"Solicitando próxima página da API: {next_page}...")
-                yield self.build_api_request(next_page)
+                yield self.build_api_request(
+                    termo_atual=termo_atual, page_number=next_page
+                )
 
         except json.JSONDecodeError as e:
             self.logger.error(
-                f"Falha ao processar o JSON da API na página {page_number}. Erro: {e}"
+                f"Falha ao processar JSON. Termo: {termo_atual} | Pág: {page_number}. Erro: {e}"
             )
 
     def parse_materia(self, response: Response):
