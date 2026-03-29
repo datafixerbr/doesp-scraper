@@ -6,5 +6,7 @@ dist/
 wheels/
 *.egg-info
 
+# Diretórios de dados
+resultados_doe/
 # Virtual environments
 .venv
