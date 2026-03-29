@@ -34,8 +34,7 @@ Certifique-se de ter os seguintes componentes instalados em seu ambiente:
 **1. Clone o repositório**
 
 ```bash
-git clone [https://github.com/seu-usuario/doesp-scraper.git](https://github.com/seu-usuario/doesp-scraper.git)
-cd doesp-scraper
+git clone git@github.com:datafixerbr/doesp-scraper.git
 ```
 
 **2. Instale as dependências** Se estiver usando o uv (conforme o uv.lock do projeto):
